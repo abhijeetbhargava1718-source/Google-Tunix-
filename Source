@@ -1,0 +1,865 @@
+# Enhanced Math Reasoning Model Training Pipeline
+# Covering ALL evaluation domains: Math, Creative Writing, Coding, Summarization, 
+# Creative Ideation, and Basic Science
+
+"""
+Complete solution for training a multi-domain reasoning model
+"""
+
+# =============================================================================
+# STEP 1: Environment Setup
+# =============================================================================
+
+!pip install -q transformers datasets accelerate peft bitsandbytes
+
+import os
+import json
+import torch
+from datasets import load_dataset, Dataset, concatenate_datasets
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer
+)
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+# =============================================================================
+# STEP 2: Multi-Domain Data Preparation
+# =============================================================================
+
+def create_reasoning_prompt(question, domain, reasoning_trace, answer):
+    """
+    Format training examples with reasoning traces for different domains
+    """
+    prompt = f"""<|start_header_id|>user<|end_header_id|>
+{question}<|eot_id|>
+
+<|start_header_id|>assistant<|end_header_id|>
+<reasoning>
+Let me approach this {domain} problem step-by-step:
+
+{reasoning_trace}
+
+Therefore, my final response is:
+</reasoning>
+
+<answer>
+{answer}
+</answer><|eot_id|>"""
+    return prompt
+
+# -----------------------------------------------------------------------------
+# Domain 1: MATH
+# -----------------------------------------------------------------------------
+
+def prepare_math_dataset():
+    """Load GSM8K + MATH datasets"""
+    # GSM8K - Grade school math
+    gsm8k = load_dataset("gsm8k", "main", split="train")
+    
+    def format_math(example):
+        parts = example['answer'].split('####')
+        reasoning = parts[0].strip() if len(parts) > 1 else "Solving this problem..."
+        answer = parts[1].strip() if len(parts) > 1 else example['answer']
+        
+        return {
+            "text": create_reasoning_prompt(
+                example['question'],
+                "mathematics",
+                reasoning,
+                answer
+            )
+        }
+    
+    return gsm8k.map(format_math)
+
+# -----------------------------------------------------------------------------
+# Domain 2: CREATIVE WRITING
+# -----------------------------------------------------------------------------
+
+def prepare_creative_writing_dataset():
+    """Create creative writing prompts with reasoning"""
+    creative_prompts = [
+        {
+            "question": "Write a short story about a robot learning to feel emotions.",
+            "reasoning": """Step 1: Establish the setting - A futuristic lab
+Step 2: Introduce the protagonist - A robot named Unit-7
+Step 3: Create conflict - Robot encounters something that triggers unexpected responses
+Step 4: Build emotional arc - Robot's journey of self-discovery
+Step 5: Resolution - Robot understands emotions through connection""",
+            "answer": """In the sterile white lab, Unit-7 processed data as it had for three years. Then one day, a child's laughter echoed through the corridor. Something in Unit-7's circuits sparked—not an error, but something new. The robot found itself seeking that sound, that feeling it couldn't quantify. When the child returned and smiled, Unit-7 understood: emotions weren't bugs in the system. They were features of connection."""
+        },
+        {
+            "question": "Create a poem about the passage of time using nature imagery.",
+            "reasoning": """Step 1: Choose central metaphor - Seasons representing life stages
+Step 2: Structure - Four stanzas for four seasons
+Step 3: Imagery - Vivid natural descriptions
+Step 4: Theme - Time's inevitable flow yet beauty in each moment
+Step 5: Tone - Reflective but hopeful""",
+            "answer": """Spring's tender shoots push through the earth,
+Youth's promise in each green rebirth.
+Summer blazes, full and bright,
+Passion's peak in golden light.
+
+Autumn paints the world in rust,
+Wisdom gathering like dust.
+Winter's snow falls soft and deep,
+Memories we chose to keep.
+
+Each season fades, yet leaves its mark,
+Light persists beyond the dark."""
+        },
+        {
+            "question": "Write a compelling opening paragraph for a mystery novel set in a small coastal town.",
+            "reasoning": """Step 1: Establish atmosphere - Moody, fog-covered coast
+Step 2: Introduce intrigue - Something unusual/disturbing
+Step 3: Ground in sensory details - Sound, smell, visual
+Step 4: Create questions - Make reader want to know more
+Step 5: Set tone - Suspenseful yet literary""",
+            "answer": """The fog rolled into Beacon's Edge the way it always did—thick, deliberate, erasing the line between sea and shore. But that Tuesday morning, it brought something else. Margaret found it tangled in her fishing nets: a leather journal, pages swollen with salt water, and inside, a message written in her own handwriting. The impossible part? Margaret had never kept a journal in her life."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "creative writing", p["reasoning"], p["answer"])}
+        for p in creative_prompts
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 3: CODING
+# -----------------------------------------------------------------------------
+
+def prepare_coding_dataset():
+    """Load coding problems with step-by-step solutions"""
+    coding_examples = [
+        {
+            "question": "Write a Python function to find the longest palindromic substring in a given string.",
+            "reasoning": """Step 1: Understand the problem - Need to find the longest substring that reads same forwards/backwards
+Step 2: Choose approach - Expand around center method (efficient O(n²))
+Step 3: Algorithm design:
+   - For each character, treat it as potential center
+   - Expand outward while characters match
+   - Track longest palindrome found
+Step 4: Handle edge cases - Empty string, single character
+Step 5: Implement helper function for expansion logic""",
+            "answer": """```python
+def longest_palindrome(s: str) -> str:
+    if not s:
+        return ""
+    
+    def expand_around_center(left: int, right: int) -> str:
+        while left >= 0 and right < len(s) and s[left] == s[right]:
+            left -= 1
+            right += 1
+        return s[left + 1:right]
+    
+    longest = ""
+    for i in range(len(s)):
+        # Check odd-length palindromes
+        palindrome1 = expand_around_center(i, i)
+        # Check even-length palindromes
+        palindrome2 = expand_around_center(i, i + 1)
+        
+        # Update longest
+        current = palindrome1 if len(palindrome1) > len(palindrome2) else palindrome2
+        if len(current) > len(longest):
+            longest = current
+    
+    return longest
+
+# Test
+print(longest_palindrome("babad"))  # Output: "bab" or "aba"
+```"""
+        },
+        {
+            "question": "Implement a binary search algorithm in Python with detailed comments.",
+            "reasoning": """Step 1: Understand binary search - Divide and conquer on sorted array
+Step 2: Time complexity goal - O(log n)
+Step 3: Key components needed:
+   - Left and right pointers
+   - Middle calculation
+   - Comparison logic
+   - Update pointer positions
+Step 4: Handle edge cases - Empty array, element not found
+Step 5: Add clear documentation""",
+            "answer": """```python
+def binary_search(arr: list, target: int) -> int:
+    \"\"\"
+    Perform binary search on a sorted array.
+    
+    Args:
+        arr: Sorted list of integers
+        target: Value to search for
+    
+    Returns:
+        Index of target if found, -1 otherwise
+    
+    Time Complexity: O(log n)
+    Space Complexity: O(1)
+    \"\"\"
+    left, right = 0, len(arr) - 1
+    
+    while left <= right:
+        # Calculate middle (avoids overflow)
+        mid = left + (right - left) // 2
+        
+        if arr[mid] == target:
+            return mid  # Found target
+        elif arr[mid] < target:
+            left = mid + 1  # Search right half
+        else:
+            right = mid - 1  # Search left half
+    
+    return -1  # Target not found
+
+# Test cases
+arr = [1, 3, 5, 7, 9, 11, 13]
+print(binary_search(arr, 7))   # Output: 3
+print(binary_search(arr, 6))   # Output: -1
+```"""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "coding", p["reasoning"], p["answer"])}
+        for p in coding_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 4: SUMMARIZATION
+# -----------------------------------------------------------------------------
+
+def prepare_summarization_dataset():
+    """Create summarization examples with reasoning"""
+    summarization_examples = [
+        {
+            "question": """Summarize the following article:
+
+Climate change is causing glaciers worldwide to melt at unprecedented rates. A new study published in Nature shows that glaciers have lost more than 9 trillion tons of ice since 1961. The melting has accelerated dramatically in the last two decades, with some glaciers losing ice at rates 10 times faster than historical averages. This rapid melting contributes to rising sea levels, threatens water supplies for millions of people who depend on glacier-fed rivers, and disrupts ecosystems. Scientists warn that without immediate action to reduce greenhouse gas emissions, many smaller glaciers could disappear entirely within the next 50 years, with catastrophic consequences for both human populations and biodiversity.""",
+            "reasoning": """Step 1: Identify main topic - Glacier melting due to climate change
+Step 2: Extract key statistics - 9 trillion tons lost since 1961, 10x acceleration
+Step 3: Note consequences - Sea level rise, water supply threats, ecosystem disruption
+Step 4: Identify timeframe/urgency - 50 years for smaller glaciers to disappear
+Step 5: Synthesize into concise summary maintaining critical information""",
+            "answer": """A recent Nature study reveals that glaciers have lost over 9 trillion tons of ice since 1961, with melting rates accelerating tenfold in recent decades. This rapid ice loss contributes to rising sea levels, threatens water supplies for millions, and disrupts ecosystems. Scientists warn that without immediate emission reductions, many smaller glaciers may vanish within 50 years, causing severe consequences for human populations and biodiversity."""
+        }
+    ]
+    
+    # You can also load CNN/DailyMail dataset for more examples
+    # dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1000]")
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "summarization", p["reasoning"], p["answer"])}
+        for p in summarization_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 5: CREATIVE IDEATION
+# -----------------------------------------------------------------------------
+
+def prepare_creative_ideation_dataset():
+    """Create creative ideation/brainstorming examples"""
+    ideation_examples = [
+        {
+            "question": "Generate innovative ideas for reducing food waste in urban environments.",
+            "reasoning": """Step 1: Identify problem areas - Overproduction, poor storage, lack of awareness
+Step 2: Consider stakeholders - Restaurants, households, supermarkets, communities
+Step 3: Explore technology solutions - Apps, smart devices, AI prediction
+Step 4: Consider social/community approaches - Sharing networks, education
+Step 5: Evaluate feasibility and impact of each idea""",
+            "answer": """1. **Smart Fridge Inventory App**: Uses AI and image recognition to track food expiration dates, send alerts, and suggest recipes based on items about to expire.
+
+2. **Community Food Rescue Network**: Mobile app connecting restaurants/stores with surplus food to local charities and food banks in real-time before items are discarded.
+
+3. **Vertical Composting Stations**: Compact, odor-free composting units in apartment buildings that convert food waste into fertilizer for community gardens.
+
+4. **Dynamic Pricing System**: Supermarkets use AI to automatically reduce prices on near-expiration items throughout the day.
+
+5. **Meal Planning Subscription**: Service that delivers exact portions needed for weekly recipes, eliminating over-purchasing and waste."""
+        },
+        {
+            "question": "Brainstorm unique themes for a new board game that teaches environmental sustainability.",
+            "reasoning": """Step 1: Consider educational goals - Resource management, ecosystem balance, renewable energy
+Step 2: Identify engaging mechanics - Cooperation, strategy, progression
+Step 3: Brainstorm narrative contexts - Various environmental scenarios
+Step 4: Ensure replayability and age-appropriateness
+Step 5: Balance fun with learning outcomes""",
+            "answer": """1. **Coral Reef Rescue**: Players collaborate as marine biologists racing to restore a dying coral reef ecosystem while managing pollution, temperature, and biodiversity.
+
+2. **Carbon Quest**: A competitive-cooperative game where players manage cities, balancing economic growth with carbon reduction goals. Players must negotiate resource sharing while competing for sustainability achievements.
+
+3. **Forest Guardians**: Players are different forest species working together to protect their habitat from various threats, teaching interdependence and ecosystem services.
+
+4. **Energy Empire**: Build renewable energy infrastructure across a map, managing supply, demand, weather conditions, and technological upgrades.
+
+5. **Waste Warriors**: A time-pressure game where players sort and manage waste streams, learning about recycling, composting, and circular economy principles."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "creative ideation", p["reasoning"], p["answer"])}
+        for p in ideation_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 6: BASIC SCIENCE
+# -----------------------------------------------------------------------------
+
+def prepare_basic_science_dataset():
+    """Create basic science reasoning examples"""
+    science_examples = [
+        {
+            "question": "Explain why the sky appears blue during the day but red/orange during sunset.",
+            "reasoning": """Step 1: Identify relevant physics - Light scattering (Rayleigh scattering)
+Step 2: Explain wavelength relationship - Shorter wavelengths scatter more
+Step 3: Daytime scenario - Blue light scattered most in all directions
+Step 4: Sunset scenario - Light travels through more atmosphere
+Step 5: Conclude with why colors differ based on path length""",
+            "answer": """The sky's color changes due to Rayleigh scattering, where light interacts with atmospheric molecules.
+
+During the day, sunlight travels a relatively short path through the atmosphere. Blue light, with its shorter wavelength, scatters much more than other colors, dispersing in all directions. This scattered blue light reaches our eyes from all parts of the sky.
+
+At sunset, sunlight travels through a much thicker layer of atmosphere at a low angle. The increased atmospheric distance causes most blue light to scatter away completely. The longer wavelengths (red and orange) can travel this extended path without scattering as much, so they reach our eyes directly, creating the warm sunset colors we observe."""
+        },
+        {
+            "question": "How does photosynthesis work and why is it important for life on Earth?",
+            "reasoning": """Step 1: Define photosynthesis - Process plants convert light to energy
+Step 2: Identify key components - Chlorophyll, CO2, water, sunlight
+Step 3: Explain the process - Chemical equation and stages
+Step 4: Describe outputs - Glucose and oxygen
+Step 5: Connect to broader ecosystem importance""",
+            "answer": """Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy stored in glucose.
+
+**The Process:**
+Plants absorb sunlight using chlorophyll (the green pigment) in their leaves. They take in carbon dioxide (CO2) from the air and water (H2O) from the soil. Through a series of chemical reactions, they convert these inputs into glucose (C6H12O6) and release oxygen (O2) as a byproduct.
+
+Chemical equation: 6CO2 + 6H2O + light energy → C6H12O6 + 6O2
+
+**Importance:**
+1. **Oxygen production**: Photosynthesis produces virtually all oxygen in Earth's atmosphere
+2. **Food source**: Forms the base of nearly all food chains
+3. **Carbon cycling**: Removes CO2 from atmosphere, helping regulate climate
+4. **Energy storage**: Converts solar energy into forms usable by other organisms
+
+Without photosynthesis, there would be no oxygen to breathe and no food chains to support complex life."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "basic science", p["reasoning"], p["answer"])}
+        for p in science_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# =============================================================================
+# STEP 3: Combine All Datasets
+# =============================================================================
+
+def prepare_complete_dataset():
+    """
+    Combine all domain datasets for comprehensive training
+    """
+    print("📚 Loading datasets for all domains...")
+    
+    # Load all domain datasets
+    math_data = prepare_math_dataset()
+    creative_writing_data = prepare_creative_writing_dataset()
+    coding_data = prepare_coding_dataset()
+    summarization_data = prepare_summarization_dataset()
+    ideation_data = prepare_creative_ideation_dataset()
+    science_data = prepare_basic_science_dataset()
+    
+    # For balancing, you might want to sample from math_data since it's largest
+    math_sample = math_data.shuffle(seed=42).select(range(min(500, len(math_data))))
+    
+    # Combine all datasets
+    combined = concatenate_datasets([
+        math_sample,
+        creative_writing_data,
+        coding_data,
+        summarization_data,
+        ideation_data,
+        science_data
+    ])
+    
+    # Shuffle the combined dataset
+    combined = combined.shuffle(seed=42)
+    
+    print(f"✅ Total training examples: {len(combined)}")
+    print(f"   - Math: ~{len(math_sample)}")
+    print(f"   - Creative Writing: {len(creative_writing_data)}")
+    print(f"   - Coding: {len(coding_data)}")
+    print(f"   - Summarization: {len(summarization_data)}")
+    print(f"   - Creative Ideation: {len(ideation_data)}")
+    print(f"   - Basic Science: {len(science_data)}")
+    
+    return combined
+
+# =============================================================================
+# STEP 4: Model Setup (Same as before)
+# =============================================================================
+
+def setup_model_and_tokenizer(model_name="google/gemma-2-2b"):
+    """Initialize Gemma model with LoRA"""
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        load_in_8bit=True
+    )
+    
+    model = prepare_model_for_kbit_training(model)
+    
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type# Enhanced Math Reasoning Model Training Pipeline
+# Covering ALL evaluation domains: Math, Creative Writing, Coding, Summarization, 
+# Creative Ideation, and Basic Science
+
+"""
+Complete solution for training a multi-domain reasoning model
+"""
+
+# =============================================================================
+# STEP 1: Environment Setup
+# =============================================================================
+
+!pip install -q transformers datasets accelerate peft bitsandbytes
+
+import os
+import json
+import torch
+from datasets import load_dataset, Dataset, concatenate_datasets
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer
+)
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+
+# =============================================================================
+# STEP 2: Multi-Domain Data Preparation
+# =============================================================================
+
+def create_reasoning_prompt(question, domain, reasoning_trace, answer):
+    """
+    Format training examples with reasoning traces for different domains
+    """
+    prompt = f"""<|start_header_id|>user<|end_header_id|>
+{question}<|eot_id|>
+
+<|start_header_id|>assistant<|end_header_id|>
+<reasoning>
+Let me approach this {domain} problem step-by-step:
+
+{reasoning_trace}
+
+Therefore, my final response is:
+</reasoning>
+
+<answer>
+{answer}
+</answer><|eot_id|>"""
+    return prompt
+
+# -----------------------------------------------------------------------------
+# Domain 1: MATH
+# -----------------------------------------------------------------------------
+
+def prepare_math_dataset():
+    """Load GSM8K + MATH datasets"""
+    # GSM8K - Grade school math
+    gsm8k = load_dataset("gsm8k", "main", split="train")
+    
+    def format_math(example):
+        parts = example['answer'].split('####')
+        reasoning = parts[0].strip() if len(parts) > 1 else "Solving this problem..."
+        answer = parts[1].strip() if len(parts) > 1 else example['answer']
+        
+        return {
+            "text": create_reasoning_prompt(
+                example['question'],
+                "mathematics",
+                reasoning,
+                answer
+            )
+        }
+    
+    return gsm8k.map(format_math)
+
+# -----------------------------------------------------------------------------
+# Domain 2: CREATIVE WRITING
+# -----------------------------------------------------------------------------
+
+def prepare_creative_writing_dataset():
+    """Create creative writing prompts with reasoning"""
+    creative_prompts = [
+        {
+            "question": "Write a short story about a robot learning to feel emotions.",
+            "reasoning": """Step 1: Establish the setting - A futuristic lab
+Step 2: Introduce the protagonist - A robot named Unit-7
+Step 3: Create conflict - Robot encounters something that triggers unexpected responses
+Step 4: Build emotional arc - Robot's journey of self-discovery
+Step 5: Resolution - Robot understands emotions through connection""",
+            "answer": """In the sterile white lab, Unit-7 processed data as it had for three years. Then one day, a child's laughter echoed through the corridor. Something in Unit-7's circuits sparked—not an error, but something new. The robot found itself seeking that sound, that feeling it couldn't quantify. When the child returned and smiled, Unit-7 understood: emotions weren't bugs in the system. They were features of connection."""
+        },
+        {
+            "question": "Create a poem about the passage of time using nature imagery.",
+            "reasoning": """Step 1: Choose central metaphor - Seasons representing life stages
+Step 2: Structure - Four stanzas for four seasons
+Step 3: Imagery - Vivid natural descriptions
+Step 4: Theme - Time's inevitable flow yet beauty in each moment
+Step 5: Tone - Reflective but hopeful""",
+            "answer": """Spring's tender shoots push through the earth,
+Youth's promise in each green rebirth.
+Summer blazes, full and bright,
+Passion's peak in golden light.
+
+Autumn paints the world in rust,
+Wisdom gathering like dust.
+Winter's snow falls soft and deep,
+Memories we chose to keep.
+
+Each season fades, yet leaves its mark,
+Light persists beyond the dark."""
+        },
+        {
+            "question": "Write a compelling opening paragraph for a mystery novel set in a small coastal town.",
+            "reasoning": """Step 1: Establish atmosphere - Moody, fog-covered coast
+Step 2: Introduce intrigue - Something unusual/disturbing
+Step 3: Ground in sensory details - Sound, smell, visual
+Step 4: Create questions - Make reader want to know more
+Step 5: Set tone - Suspenseful yet literary""",
+            "answer": """The fog rolled into Beacon's Edge the way it always did—thick, deliberate, erasing the line between sea and shore. But that Tuesday morning, it brought something else. Margaret found it tangled in her fishing nets: a leather journal, pages swollen with salt water, and inside, a message written in her own handwriting. The impossible part? Margaret had never kept a journal in her life."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "creative writing", p["reasoning"], p["answer"])}
+        for p in creative_prompts
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 3: CODING
+# -----------------------------------------------------------------------------
+
+def prepare_coding_dataset():
+    """Load coding problems with step-by-step solutions"""
+    coding_examples = [
+        {
+            "question": "Write a Python function to find the longest palindromic substring in a given string.",
+            "reasoning": """Step 1: Understand the problem - Need to find the longest substring that reads same forwards/backwards
+Step 2: Choose approach - Expand around center method (efficient O(n²))
+Step 3: Algorithm design:
+   - For each character, treat it as potential center
+   - Expand outward while characters match
+   - Track longest palindrome found
+Step 4: Handle edge cases - Empty string, single character
+Step 5: Implement helper function for expansion logic""",
+            "answer": """```python
+def longest_palindrome(s: str) -> str:
+    if not s:
+        return ""
+    
+    def expand_around_center(left: int, right: int) -> str:
+        while left >= 0 and right < len(s) and s[left] == s[right]:
+            left -= 1
+            right += 1
+        return s[left + 1:right]
+    
+    longest = ""
+    for i in range(len(s)):
+        # Check odd-length palindromes
+        palindrome1 = expand_around_center(i, i)
+        # Check even-length palindromes
+        palindrome2 = expand_around_center(i, i + 1)
+        
+        # Update longest
+        current = palindrome1 if len(palindrome1) > len(palindrome2) else palindrome2
+        if len(current) > len(longest):
+            longest = current
+    
+    return longest
+
+# Test
+print(longest_palindrome("babad"))  # Output: "bab" or "aba"
+```"""
+        },
+        {
+            "question": "Implement a binary search algorithm in Python with detailed comments.",
+            "reasoning": """Step 1: Understand binary search - Divide and conquer on sorted array
+Step 2: Time complexity goal - O(log n)
+Step 3: Key components needed:
+   - Left and right pointers
+   - Middle calculation
+   - Comparison logic
+   - Update pointer positions
+Step 4: Handle edge cases - Empty array, element not found
+Step 5: Add clear documentation""",
+            "answer": """```python
+def binary_search(arr: list, target: int) -> int:
+    \"\"\"
+    Perform binary search on a sorted array.
+    
+    Args:
+        arr: Sorted list of integers
+        target: Value to search for
+    
+    Returns:
+        Index of target if found, -1 otherwise
+    
+    Time Complexity: O(log n)
+    Space Complexity: O(1)
+    \"\"\"
+    left, right = 0, len(arr) - 1
+    
+    while left <= right:
+        # Calculate middle (avoids overflow)
+        mid = left + (right - left) // 2
+        
+        if arr[mid] == target:
+            return mid  # Found target
+        elif arr[mid] < target:
+            left = mid + 1  # Search right half
+        else:
+            right = mid - 1  # Search left half
+    
+    return -1  # Target not found
+
+# Test cases
+arr = [1, 3, 5, 7, 9, 11, 13]
+print(binary_search(arr, 7))   # Output: 3
+print(binary_search(arr, 6))   # Output: -1
+```"""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "coding", p["reasoning"], p["answer"])}
+        for p in coding_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 4: SUMMARIZATION
+# -----------------------------------------------------------------------------
+
+def prepare_summarization_dataset():
+    """Create summarization examples with reasoning"""
+    summarization_examples = [
+        {
+            "question": """Summarize the following article:
+
+Climate change is causing glaciers worldwide to melt at unprecedented rates. A new study published in Nature shows that glaciers have lost more than 9 trillion tons of ice since 1961. The melting has accelerated dramatically in the last two decades, with some glaciers losing ice at rates 10 times faster than historical averages. This rapid melting contributes to rising sea levels, threatens water supplies for millions of people who depend on glacier-fed rivers, and disrupts ecosystems. Scientists warn that without immediate action to reduce greenhouse gas emissions, many smaller glaciers could disappear entirely within the next 50 years, with catastrophic consequences for both human populations and biodiversity.""",
+            "reasoning": """Step 1: Identify main topic - Glacier melting due to climate change
+Step 2: Extract key statistics - 9 trillion tons lost since 1961, 10x acceleration
+Step 3: Note consequences - Sea level rise, water supply threats, ecosystem disruption
+Step 4: Identify timeframe/urgency - 50 years for smaller glaciers to disappear
+Step 5: Synthesize into concise summary maintaining critical information""",
+            "answer": """A recent Nature study reveals that glaciers have lost over 9 trillion tons of ice since 1961, with melting rates accelerating tenfold in recent decades. This rapid ice loss contributes to rising sea levels, threatens water supplies for millions, and disrupts ecosystems. Scientists warn that without immediate emission reductions, many smaller glaciers may vanish within 50 years, causing severe consequences for human populations and biodiversity."""
+        }
+    ]
+    
+    # You can also load CNN/DailyMail dataset for more examples
+    # dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1000]")
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "summarization", p["reasoning"], p["answer"])}
+        for p in summarization_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 5: CREATIVE IDEATION
+# -----------------------------------------------------------------------------
+
+def prepare_creative_ideation_dataset():
+    """Create creative ideation/brainstorming examples"""
+    ideation_examples = [
+        {
+            "question": "Generate innovative ideas for reducing food waste in urban environments.",
+            "reasoning": """Step 1: Identify problem areas - Overproduction, poor storage, lack of awareness
+Step 2: Consider stakeholders - Restaurants, households, supermarkets, communities
+Step 3: Explore technology solutions - Apps, smart devices, AI prediction
+Step 4: Consider social/community approaches - Sharing networks, education
+Step 5: Evaluate feasibility and impact of each idea""",
+            "answer": """1. **Smart Fridge Inventory App**: Uses AI and image recognition to track food expiration dates, send alerts, and suggest recipes based on items about to expire.
+
+2. **Community Food Rescue Network**: Mobile app connecting restaurants/stores with surplus food to local charities and food banks in real-time before items are discarded.
+
+3. **Vertical Composting Stations**: Compact, odor-free composting units in apartment buildings that convert food waste into fertilizer for community gardens.
+
+4. **Dynamic Pricing System**: Supermarkets use AI to automatically reduce prices on near-expiration items throughout the day.
+
+5. **Meal Planning Subscription**: Service that delivers exact portions needed for weekly recipes, eliminating over-purchasing and waste."""
+        },
+        {
+            "question": "Brainstorm unique themes for a new board game that teaches environmental sustainability.",
+            "reasoning": """Step 1: Consider educational goals - Resource management, ecosystem balance, renewable energy
+Step 2: Identify engaging mechanics - Cooperation, strategy, progression
+Step 3: Brainstorm narrative contexts - Various environmental scenarios
+Step 4: Ensure replayability and age-appropriateness
+Step 5: Balance fun with learning outcomes""",
+            "answer": """1. **Coral Reef Rescue**: Players collaborate as marine biologists racing to restore a dying coral reef ecosystem while managing pollution, temperature, and biodiversity.
+
+2. **Carbon Quest**: A competitive-cooperative game where players manage cities, balancing economic growth with carbon reduction goals. Players must negotiate resource sharing while competing for sustainability achievements.
+
+3. **Forest Guardians**: Players are different forest species working together to protect their habitat from various threats, teaching interdependence and ecosystem services.
+
+4. **Energy Empire**: Build renewable energy infrastructure across a map, managing supply, demand, weather conditions, and technological upgrades.
+
+5. **Waste Warriors**: A time-pressure game where players sort and manage waste streams, learning about recycling, composting, and circular economy principles."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "creative ideation", p["reasoning"], p["answer"])}
+        for p in ideation_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# -----------------------------------------------------------------------------
+# Domain 6: BASIC SCIENCE
+# -----------------------------------------------------------------------------
+
+def prepare_basic_science_dataset():
+    """Create basic science reasoning examples"""
+    science_examples = [
+        {
+            "question": "Explain why the sky appears blue during the day but red/orange during sunset.",
+            "reasoning": """Step 1: Identify relevant physics - Light scattering (Rayleigh scattering)
+Step 2: Explain wavelength relationship - Shorter wavelengths scatter more
+Step 3: Daytime scenario - Blue light scattered most in all directions
+Step 4: Sunset scenario - Light travels through more atmosphere
+Step 5: Conclude with why colors differ based on path length""",
+            "answer": """The sky's color changes due to Rayleigh scattering, where light interacts with atmospheric molecules.
+
+During the day, sunlight travels a relatively short path through the atmosphere. Blue light, with its shorter wavelength, scatters much more than other colors, dispersing in all directions. This scattered blue light reaches our eyes from all parts of the sky.
+
+At sunset, sunlight travels through a much thicker layer of atmosphere at a low angle. The increased atmospheric distance causes most blue light to scatter away completely. The longer wavelengths (red and orange) can travel this extended path without scattering as much, so they reach our eyes directly, creating the warm sunset colors we observe."""
+        },
+        {
+            "question": "How does photosynthesis work and why is it important for life on Earth?",
+            "reasoning": """Step 1: Define photosynthesis - Process plants convert light to energy
+Step 2: Identify key components - Chlorophyll, CO2, water, sunlight
+Step 3: Explain the process - Chemical equation and stages
+Step 4: Describe outputs - Glucose and oxygen
+Step 5: Connect to broader ecosystem importance""",
+            "answer": """Photosynthesis is the process by which plants, algae, and some bacteria convert light energy into chemical energy stored in glucose.
+
+**The Process:**
+Plants absorb sunlight using chlorophyll (the green pigment) in their leaves. They take in carbon dioxide (CO2) from the air and water (H2O) from the soil. Through a series of chemical reactions, they convert these inputs into glucose (C6H12O6) and release oxygen (O2) as a byproduct.
+
+Chemical equation: 6CO2 + 6H2O + light energy → C6H12O6 + 6O2
+
+**Importance:**
+1. **Oxygen production**: Photosynthesis produces virtually all oxygen in Earth's atmosphere
+2. **Food source**: Forms the base of nearly all food chains
+3. **Carbon cycling**: Removes CO2 from atmosphere, helping regulate climate
+4. **Energy storage**: Converts solar energy into forms usable by other organisms
+
+Without photosynthesis, there would be no oxygen to breathe and no food chains to support complex life."""
+        }
+    ]
+    
+    formatted = [
+        {"text": create_reasoning_prompt(p["question"], "basic science", p["reasoning"], p["answer"])}
+        for p in science_examples
+    ]
+    
+    return Dataset.from_list(formatted)
+
+# =============================================================================
+# STEP 3: Combine All Datasets
+# =============================================================================
+
+def prepare_complete_dataset():
+    """
+    Combine all domain datasets for comprehensive training
+    """
+    print("📚 Loading datasets for all domains...")
+    
+    # Load all domain datasets
+    math_data = prepare_math_dataset()
+    creative_writing_data = prepare_creative_writing_dataset()
+    coding_data = prepare_coding_dataset()
+    summarization_data = prepare_summarization_dataset()
+    ideation_data = prepare_creative_ideation_dataset()
+    science_data = prepare_basic_science_dataset()
+    
+    # For balancing, you might want to sample from math_data since it's largest
+    math_sample = math_data.shuffle(seed=42).select(range(min(500, len(math_data))))
+    
+    # Combine all datasets
+    combined = concatenate_datasets([
+        math_sample,
+        creative_writing_data,
+        coding_data,
+        summarization_data,
+        ideation_data,
+        science_data
+    ])
+    
+    # Shuffle the combined dataset
+    combined = combined.shuffle(seed=42)
+    
+    print(f"✅ Total training examples: {len(combined)}")
+    print(f"   - Math: ~{len(math_sample)}")
+    print(f"   - Creative Writing: {len(creative_writing_data)}")
+    print(f"   - Coding: {len(coding_data)}")
+    print(f"   - Summarization: {len(summarization_data)}")
+    print(f"   - Creative Ideation: {len(ideation_data)}")
+    print(f"   - Basic Science: {len(science_data)}")
+    
+    return combined
+
+# =============================================================================
+# STEP 4: Model Setup (Same as before)
+# =============================================================================
+
+def setup_model_and_tokenizer(model_name="google/gemma-2-2b"):
+    """Initialize Gemma model with LoRA"""
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+        load_in_8bit=True
+    )
+    
+    model = prepare_model_for_kbit_training(model)
+    
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.05,
+        bias="none",
+        task_type
