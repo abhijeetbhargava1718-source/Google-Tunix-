@@ -1,0 +1,212 @@
+# Multi-Domain Reasoning Model: Training Strategy
+
+## 🎯 The Challenge
+
+The competition evaluates models across **6 diverse domains**, requiring a single model that can:
+- Solve mathematical problems with clear reasoning
+- Generate creative writing (stories, poems, narratives)
+- Write and debug code
+- Summarize complex text
+- Brainstorm innovative ideas
+- Explain scientific concepts
+
+This is significantly harder than training a domain-specific model!
+
+---
+
+## 📊 Data Collection Strategy
+
+### Domain 1: Mathematics (40% of dataset)
+
+**Why the largest?** Math is objective and has clear right/wrong answers, making it the evaluation anchor.
+
+**Sources:**
+1. **GSM8K** (Primary): 7,500 grade school word problems
+   ```python
+   from datasets import load_dataset
+   gsm8k = load_dataset("gsm8k", "main")
+   ```
+
+2. **MATH Dataset**: Competition-level problems
+   ```python
+   math_dataset = load_dataset("hendrycks/math")
+   ```
+
+3. **MetaMathQA**: Large-scale synthetic dataset (optional for expansion)
+
+**Formatting Strategy:**
+- Extract existing step-by-step solutions from GSM8K
+- Parse answer format: "Solution #### Answer"
+- Reformat into <reasoning> and <answer> structure
+
+### Domain 2: Creative Writing (15% of dataset)
+
+**Challenge:** Defining "reasoning" for creative tasks
+
+**Approach:** Teach the model to think about:
+- Story structure (setup, conflict, resolution)
+- Poetic devices (metaphor, rhythm, imagery)
+- Character development
+- Thematic elements
+
+**Sources:**
+1. **WritingPrompts** (Reddit): Creative prompts with responses
+   ```python
+   writing = load_dataset("euclaise/writingprompts")
+   ```
+
+2. **Custom Examples**: Create 50-100 high-quality examples showing creative process:
+   - Short stories with structural reasoning
+   - Poems with device/meter reasoning
+   - Character sketches with development reasoning
+
+**Sample Reasoning for Creative Task:**
+```
+Prompt: Write a metaphor for loneliness
+
+Reasoning:
+Step 1: Identify emotion characteristics - Isolation, emptiness, silence
+Step 2: Find physical correlate - Empty spaces, vast distances
+Step 3: Add sensory details - Cold, echo, darkness
+Step 4: Craft unexpected comparison - Avoid clichés
+Step 5: Polish for impact
+
+Answer: Loneliness is an empty stadium after the final whistle,
+where your voice echoes back but no one applauds.
+```
+
+### Domain 3: Coding (15% of dataset)
+
+**What to teach:** Algorithm design, debugging logic, code optimization
+
+**Sources:**
+1. **MBPP** (Mostly Basic Python Problems): 1,000 entry-level Python tasks
+   ```python
+   mbpp = load_dataset("mbpp")
+   ```
+
+2. **HumanEval**: 164 programming problems
+   ```python
+   humaneval = load_dataset("openai_humaneval")
+   ```
+
+3. **CodeContests**: Competition programming (harder, use selectively)
+
+**Reasoning Structure:**
+1. Problem understanding
+2. Algorithm selection
+3. Edge case identification
+4. Implementation strategy
+5. Complexity analysis (optional)
+
+**Example:**
+```python
+Problem: Remove duplicates from a list while preserving order
+
+Reasoning:
+Step 1: Understand requirement - Keep first occurrence, remove rest
+Step 2: Consider approaches - Set loses order, dict preserves it
+Step 3: Choose solution - Use dict.fromkeys() or manual tracking
+Step 4: Handle edge cases - Empty list, all unique, all duplicates
+Step 5: Implement efficiently - O(n) time complexity
+
+Answer:
+def remove_duplicates(lst):
+    return list(dict.fromkeys(lst))
+```
+
+### Domain 4: Summarization (10% of dataset)
+
+**Skills to teach:** Information extraction, prioritization, conciseness
+
+**Sources:**
+1. **CNN/DailyMail**: News article summarization
+   ```python
+   cnn_dm = load_dataset("cnn_dailymail", "3.0.0")
+   ```
+
+2. **XSum**: Extreme summarization (one-sentence summaries)
+   ```python
+   xsum = load_dataset("xsum")
+   ```
+
+**Reasoning Structure:**
+1. Identify main topic/thesis
+2. Extract key supporting points
+3. Remove redundant information
+4. Note important entities/numbers
+5. Synthesize concisely
+
+### Domain 5: Creative Ideation (10% of dataset)
+
+**Challenge:** Most abstract domain - brainstorming and innovation
+
+**Approach:** Create custom examples (no perfect dataset exists)
+
+**Categories to cover:**
+- Product ideas
+- Problem-solving approaches
+- Business concepts
+- Social innovations
+- Process improvements
+
+**Reasoning Pattern:**
+1. Understand problem/need
+2. Identify constraints
+3. Brainstorm without filtering
+4. Evaluate feasibility
+5. Select best ideas with justification
+
+**Example Template:**
+```
+Question: How can we reduce food waste in restaurants?
+
+Reasoning:
+Step 1: Identify waste sources - Over-ordering, portion sizes, spoilage
+Step 2: Consider stakeholders - Restaurants, customers, suppliers
+Step 3: Explore technology solutions - Apps, AI prediction, smart storage
+Step 4: Evaluate social approaches - Donation programs, customer education
+Step 5: Prioritize by impact and feasibility
+
+Answer:
+1. Smart Inventory System: AI predicts demand based on historical data,
+   weather, events to optimize ordering
+2. Flexible Portion Sizing: Let customers choose small/regular/large with
+   pricing incentives for smaller portions
+3. Food Rescue Partnership: Real-time app connects restaurants with
+   surplus food to local charities before closing time
+```
+
+### Domain 6: Basic Science (10% of dataset)
+
+**Focus:** Clear explanations of scientific concepts, not advanced research
+
+**Sources:**
+1. **SciQ**: Multiple choice science questions (adapt to open-ended)
+   ```python
+   sciq = load_dataset("sciq")
+   ```
+
+2. **ARC**: AI2 Reasoning Challenge
+   ```python
+   arc = load_dataset("ai2_arc")
+   ```
+
+3. **Custom explanations**: Create 100-150 "Explain like I'm 12" examples
+
+**Topics to cover:**
+- Physics basics (gravity, energy, light, motion)
+- Chemistry fundamentals (reactions, states of matter, atoms)
+- Biology essentials (cells, evolution, ecosystems, human body)
+- Earth science (weather, geology, climate)
+
+**Reasoning Structure:**
+1. Identify relevant scientific principle
+2. Break down to fundamental concepts
+3. Use analogies/examples
+4. Connect to observable phenomena
+5. Address common misconceptions
+
+---
+
+
